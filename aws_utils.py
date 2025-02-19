@@ -1,7 +1,4 @@
-<<<<<<< HEAD
-=======
 #aws_utils.py
->>>>>>> 9584f1b (템플릿)
 import boto3
 import json
 import logging

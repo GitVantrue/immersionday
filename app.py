@@ -1,7 +1,4 @@
-<<<<<<< HEAD
-=======
 #app.py
->>>>>>> 9584f1b (템플릿)
 import streamlit as st
 from datetime import datetime
 import time

@@ -1,7 +1,4 @@
-<<<<<<< HEAD
-=======
 #styles.py
->>>>>>> 9584f1b (템플릿)
 CUSTOM_CSS = """
     <style>
         /* 전체 배경 */
