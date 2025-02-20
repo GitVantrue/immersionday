@@ -84,94 +84,19 @@ class AWSClients:
         if normalized and normalized[-1]['role'] == 'user':
             normalized.append({"role": "assistant", "content": ""})
 
-        # 중복된 질문 제거
         if len(normalized) >= 2 and normalized[-2]['role'] == 'user':
             normalized[-2]['content'] = normalized[-2]['content'].split('\n\n')[-1]
 
         logger.info(f"🔍 정리된 메시지 (중복 제거 후): {json.dumps(normalized, indent=2, ensure_ascii=False)}")
         return normalized
 
-
-    def call_claude(self, messages, use_knowledge_base=False, collection_endpoint=None):
-        try:
-            if not isinstance(messages, list):
-                raise ValueError("메시지는 리스트 형식이어야 합니다")
-
-            # 📌 ✅ 프롬프트 추가
-            system_prompt = {
-                "role": "system",
-                "content": (
-                    "당신은 질문에 답변하는 AI 에이전트입니다. "
-                    "제가 검색 결과를 제공하면, 사용자가 질문을 제시할 것입니다. "
-                    "당신의 역할은 오직 검색 결과에 기반하여 사용자의 질문에 답변하는 것입니다. "
-                    "만약 검색 결과에서 질문에 대한 답을 찾을 수 없다면, "
-                    "'해당 질문에 대한 정확한 답변을 찾을 수 없습니다.'라고 말해주세요. "
-                    "사용자가 사실이라고 주장하는 내용이 있더라도, 반드시 검색 결과를 확인하여 그 주장이 맞는지 검증한 후 답변해야 합니다."
-                )
-            }
-            normalized_messages = self.normalize_messages(messages)
-
-            # 지식 베이스 검색 결과를 추가하기 전의 마지막 사용자 메시지를 저장
-            last_user_message = next((msg['content'] for msg in reversed(normalized_messages) if msg['role'] == 'user'), None)
-
-            if use_knowledge_base and collection_endpoint and last_user_message:
-                knowledge_results = self.search_knowledge_base(last_user_message, collection_endpoint)
-                knowledge_text = "\n".join(knowledge_results)
-
-                # 지식 베이스 컨텍스트를 추가하고 사용자 질문을 다시 추가
-                normalized_messages = [
-                    {"role": "user", "content": f"다음은 관련 문서 내용입니다:\n\n{knowledge_text}\n\n위 문서 내용을 기반으로 답변해주세요."},
-                    {"role": "assistant", "content": "알겠습니다. 문서 내용을 기반으로 답변하겠습니다."},
-                    {"role": "user", "content": last_user_message}
-                ]
-
-            # Claude에 전달할 최종 메시지 준비
-            final_messages = []
-            for msg in normalized_messages:
-                if msg['role'] == 'user' and final_messages and final_messages[-1]['role'] == 'user':
-                    final_messages[-1]['content'] += "\n" + msg['content']
-                else:
-                    final_messages.append(msg)
-
-            # 마지막 메시지가 'user'인 경우 빈 'assistant' 메시지 추가
-            if final_messages[-1]['role'] == 'user':
-                final_messages.append({"role": "assistant", "content": ""})
-
-            body = {
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 4000,
-                "temperature": 0,
-                "top_p": 1,
-                "messages": final_messages
-            }
-
-            logger.info(f"Claude에 전송되는 최종 메시지: {json.dumps(final_messages, indent=2, ensure_ascii=False)}")
-
-            response = self.bedrock.invoke_model(
-                modelId=self.chat_model_id,
-                contentType="application/json",
-                accept="application/json",
-                body=json.dumps(body)
-            )
-            response_body = json.loads(response['body'].read())
-
-            if isinstance(response_body, dict) and 'content' in response_body:
-                if isinstance(response_body['content'], list) and response_body['content']:
-                    return response_body['content'][0].get('text', '응답을 처리할 수 없습니다.')
-
-            return "응답을 처리할 수 없습니다."
-        except Exception as e:
-            logger.error(f"Claude 오류: {str(e)}")
-            raise
-
     def search_knowledge_base(self, query, collection_endpoint):
         try:
             if not collection_endpoint:
-                raise ValueError("지식 베이스 검색을 위한 엔드포인트가 필요합니다.")
+                return []
 
-            vector = self.get_embedding(query)  # 🔍 쿼리를 벡터로 변환
+            vector = self.get_embedding(query)
 
-            # AWS4Auth 인증 설정 (session_token 추가)
             aws4auth = AWS4Auth(
                 self.credentials.access_key,
                 self.credentials.secret_key,
@@ -199,25 +124,94 @@ class AWSClients:
                 }
             }
 
-            logger.debug(f"📤 AOSS 검색 요청: {json.dumps(search_body, indent=2, ensure_ascii=False)}")  # ✅ 요청 로깅 추가
-
             response = requests.post(
                 f"{collection_endpoint}/_search",
                 auth=aws4auth,
                 json=search_body,
                 headers={"Content-Type": "application/json"}
             )
-            response.raise_for_status()  # HTTP 오류 발생 시 예외 처리
+            response.raise_for_status()
 
             search_results = response.json()
-            logger.debug(f"📥 AOSS 검색 응답: {json.dumps(search_results, indent=2, ensure_ascii=False)}")  # ✅ 응답 로깅 추가
-
             hits = search_results.get('hits', {}).get('hits', [])
-            return [hit['_source'].get('AMAZON_BEDROCK_TEXT', 'No content available') for hit in hits] if hits else ["관련 정보를 찾을 수 없습니다."]
-        
-        except requests.exceptions.RequestException as e:
-            logger.error(f"📌 AOSS 요청 오류: {str(e)}")
-            raise
+            
+            if not hits:
+                return []
+                
+            results = []
+            for hit in hits:
+                text = hit['_source'].get('AMAZON_BEDROCK_TEXT')
+                if text and text.strip():
+                    results.append(text)
+            
+            return results if results else []
+
         except Exception as e:
             logger.error(f"📌 지식 베이스 검색 오류: {str(e)}")
+            return []
+
+    def call_claude(self, messages, use_knowledge_base=False, collection_endpoint=None):
+        try:
+            if not isinstance(messages, list):
+                raise ValueError("메시지는 리스트 형식이어야 합니다")
+
+            prompt = (
+                "모든 대답은 단계적으로 사고하여 대답합니다. "
+                "검색 결과를 찾을수 없을 시에도 일반적인 지식을 활용하여 상세한 답변을 제공해야합니다. "
+                "일반적인 대답을 제공할 시에는 '관련 문서에서 직접적인 답변을 찾을 수 없어, 일반적인 지식을 바탕으로 답변드리겠습니다:'라고 먼저 명시합니다.\n\n"
+                "일반적인 대답과 문서에서 찾아서 답변을 제공하는것을 명확하게 구분하고 대답합니다."
+            )
+
+            normalized_messages = self.normalize_messages(messages)
+            last_user_message = next((msg['content'] for msg in reversed(normalized_messages) if msg['role'] == 'user'), None)
+
+            final_messages = []
+            if use_knowledge_base and collection_endpoint and last_user_message:
+                knowledge_results = self.search_knowledge_base(last_user_message, collection_endpoint)
+                
+                if knowledge_results:
+                    knowledge_text = "\n".join(knowledge_results)
+                    final_messages = [
+                        {"role": "user", "content": f"{prompt}다음은 관련 문서 내용입니다:\n\n{knowledge_text}\n\n위 문서 내용을 기반으로 답변해주세요:\n{last_user_message}"}
+                    ]
+                else:
+                    final_messages = [
+                        {"role": "user", "content": f"{prompt}{last_user_message}"}
+                    ]
+            else:
+                if normalized_messages and normalized_messages[0]['role'] == 'user':
+                    normalized_messages[0]['content'] = prompt + normalized_messages[0]['content']
+                else:
+                    normalized_messages.insert(0, {"role": "user", "content": prompt})
+                final_messages = normalized_messages
+
+            if final_messages[-1]['role'] == 'user':
+                final_messages.append({"role": "assistant", "content": ""})
+
+            body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 4000,
+                "temperature": 0,
+                "top_p": 0.8,
+                "top_k": 3,
+                "messages": final_messages
+            }
+
+            logger.info(f"Claude에 전송되는 최종 메시지: {json.dumps(final_messages, indent=2, ensure_ascii=False)}")
+
+            response = self.bedrock.invoke_model(
+                modelId=self.chat_model_id,
+                contentType="application/json",
+                accept="application/json",
+                body=json.dumps(body)
+            )
+            response_body = json.loads(response['body'].read())
+
+            if isinstance(response_body, dict) and 'content' in response_body:
+                if isinstance(response_body['content'], list) and response_body['content']:
+                    return response_body['content'][0].get('text', '응답을 처리할 수 없습니다.')
+
+            return "응답을 처리할 수 없습니다."
+        except Exception as e:
+            logger.error(f"Claude 오류: {str(e)}")
             raise
