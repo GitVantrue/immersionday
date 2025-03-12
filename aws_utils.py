@@ -10,11 +10,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class AWSClients:
-    def __init__(self, region_name, embedding_model_id, chat_model_id, inference_profile_arn=None):
+    def __init__(self, region_name, embedding_model_id, chat_model_id):
         self.region_name = region_name
         self.embedding_model_id = embedding_model_id
         self.chat_model_id = chat_model_id
-        self.inference_profile_arn = inference_profile_arn
+        
 
         try:
             session = boto3.Session()

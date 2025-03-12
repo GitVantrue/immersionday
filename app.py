@@ -23,7 +23,7 @@ def initialize_session_state():
                 region_name=AWS_CONFIG['region_name'],
                 embedding_model_id=AWS_CONFIG['embedding_model_id'],
                 chat_model_id=AWS_CONFIG['chat_model_id'],
-                inference_profile_arn=AWS_CONFIG['inference_profile_arn']
+                
             )
         except Exception as e:
             logger.error(f"AWS 클라이언트 초기화 실패: {str(e)}")
