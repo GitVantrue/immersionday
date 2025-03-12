@@ -154,40 +154,48 @@ class AWSClients:
         try:
             if not isinstance(messages, list):
                 raise ValueError("메시지는 리스트 형식이어야 합니다")
-
-            prompt = (
-                "모든 대답은 단계적으로 사고하여 대답합니다. "
-                "검색 결과를 찾을수 없을 시에도 일반적인 지식을 활용하여 상세한 답변을 제공해야합니다. "
-                "일반적인 대답을 제공할 시에는 '관련 문서에서 직접적인 답변을 찾을 수 없어, 일반적인 지식을 바탕으로 답변드리겠습니다:'라고 먼저 명시합니다.\n\n"
-                "일반적인 대답과 문서에서 찾아서 답변을 제공하는것을 명확하게 구분하고 대답합니다."
-            )
-
+    
             normalized_messages = self.normalize_messages(messages)
             last_user_message = next((msg['content'] for msg in reversed(normalized_messages) if msg['role'] == 'user'), None)
-
+    
             final_messages = []
+            
             if use_knowledge_base and collection_endpoint and last_user_message:
+                # 지식 기반 모드일 때 사용할 프롬프트
+                kb_prompt = (
+                    "모든 대답은 단계적으로 사고하여 대답합니다. "
+                    "검색 결과를 찾을수 없을 시에도 일반적인 지식을 활용하여 상세한 답변을 제공해야합니다. "
+                    "일반적인 대답을 제공할 시에는 '관련 문서에서 직접적인 답변을 찾을 수 없어, 일반적인 지식을 바탕으로 답변드리겠습니다:'라고 먼저 명시합니다.\n\n"
+                    "일반적인 대답과 문서에서 찾아서 답변을 제공하는것을 명확하게 구분하고 대답합니다."
+                )
+                
                 knowledge_results = self.search_knowledge_base(last_user_message, collection_endpoint)
                 
                 if knowledge_results:
                     knowledge_text = "\n".join(knowledge_results)
                     final_messages = [
-                        {"role": "user", "content": f"{prompt}다음은 관련 문서 내용입니다:\n\n{knowledge_text}\n\n위 문서 내용을 기반으로 답변해주세요:\n{last_user_message}"}
+                        {"role": "user", "content": f"{kb_prompt}다음은 관련 문서 내용입니다:\n\n{knowledge_text}\n\n위 문서 내용을 기반으로 답변해주세요:\n{last_user_message}"}
                     ]
                 else:
                     final_messages = [
-                        {"role": "user", "content": f"{prompt}{last_user_message}"}
+                        {"role": "user", "content": f"{kb_prompt}{last_user_message}"}
                     ]
             else:
+                # 일반 모드일 때 사용할 프롬프트 (지식 기반 언급 제외)
+                general_prompt = (
+                    "모든 대답은 단계적으로 사고하여 대답합니다. "
+                    "질문에 대해 상세한 답변을 제공해야합니다."
+                )
+                
                 if normalized_messages and normalized_messages[0]['role'] == 'user':
-                    normalized_messages[0]['content'] = prompt + normalized_messages[0]['content']
+                    normalized_messages[0]['content'] = general_prompt + "\n\n" + normalized_messages[0]['content']
                 else:
-                    normalized_messages.insert(0, {"role": "user", "content": prompt})
+                    normalized_messages.insert(0, {"role": "user", "content": general_prompt})
                 final_messages = normalized_messages
-
+    
             if final_messages[-1]['role'] == 'user':
                 final_messages.append({"role": "assistant", "content": ""})
-
+    
             body = {
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": 4000,
@@ -196,9 +204,9 @@ class AWSClients:
                 "top_k": 3,
                 "messages": final_messages
             }
-
+    
             logger.info(f"Claude에 전송되는 최종 메시지: {json.dumps(final_messages, indent=2, ensure_ascii=False)}")
-
+    
             response = self.bedrock.invoke_model(
                 modelId=self.chat_model_id,
                 contentType="application/json",
@@ -206,11 +214,11 @@ class AWSClients:
                 body=json.dumps(body)
             )
             response_body = json.loads(response['body'].read())
-
+    
             if isinstance(response_body, dict) and 'content' in response_body:
                 if isinstance(response_body['content'], list) and response_body['content']:
                     return response_body['content'][0].get('text', '응답을 처리할 수 없습니다.')
-
+    
             return "응답을 처리할 수 없습니다."
         except Exception as e:
             logger.error(f"Claude 오류: {str(e)}")
